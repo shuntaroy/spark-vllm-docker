@@ -5,7 +5,17 @@ IMAGE_NAME="vllm-node"
 DEFAULT_CONTAINER_NAME="vllm_node"
 HF_CACHE_DIR="${HF_HOME:-$HOME/.cache/huggingface}"
 # Modify these if you want to pass additional docker args or set VLLM_SPARK_EXTRA_DOCKER_ARGS variable
-DOCKER_ARGS="-e NCCL_IGNORE_CPU_AFFINITY=1 -v $HF_CACHE_DIR:/root/.cache/huggingface"
+# KaLC patch: mount HF cache read-only.
+# Without :ro, the container's HF library writes 0-byte .no_exist/<sha>/*.json markers
+# (and a few other tracking files) into the host-side cache as root. Those files then
+# break subsequent host-side operations as yada — most importantly hf-download.sh's
+# rsync to peers, which can't update the root-owned markers (Permission denied).
+# Read-only is safe because all model weights are pre-staged on the host by
+# hf-download.sh; runtime writes from the HF library are *cache hints* (non-existence
+# markers, last-access timestamps) that the library degrades gracefully without.
+# Other caches (vllm, flashinfer, triton) stay RW because they receive legitimate
+# compilation artifacts at runtime that we want persisted.
+DOCKER_ARGS="-e NCCL_IGNORE_CPU_AFFINITY=1 -v $HF_CACHE_DIR:/root/.cache/huggingface:ro"
 
 # Append additional arguments from environment variable
 if [[ -n "$VLLM_SPARK_EXTRA_DOCKER_ARGS" ]]; then

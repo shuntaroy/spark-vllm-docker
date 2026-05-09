@@ -845,14 +845,8 @@ start_cluster() {
         return
     fi
 
-    # Build docker run arguments based on mode.
-    # KaLC patch: run as host user so any writes back into the bind-mounted HF /
-    # vLLM / FlashInfer / Triton caches stay yada-owned. Without this, the container
-    # writes 0-byte .no_exist/* markers and other files as root, contaminating the
-    # host cache and breaking subsequent rsync-to-peer steps. $(id -u)/$(id -g)
-    # expand on the head node; pouse must have a yada user with the same UID/GID
-    # (typical for our setup, both are 1000).
-    local docker_args_common="--user $(id -u):$(id -g) --gpus all -d --rm --network host --name $CONTAINER_NAME $DOCKER_ARGS $IMAGE_NAME"
+    # Build docker run arguments based on mode
+    local docker_args_common="--gpus all -d --rm --network host --name $CONTAINER_NAME $DOCKER_ARGS $IMAGE_NAME"
     local docker_caps_args=""
     local docker_resource_args=""
 

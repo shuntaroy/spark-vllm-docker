@@ -741,28 +741,61 @@ else
     trap cleanup_generated_mods EXIT INT TERM HUP
 fi
 
-# Check if cluster is already running
+# Check if cluster is already running.
+# Only a fully-running cluster (head AND all workers) is reused. A partial
+# state — e.g. the worker survived while the head node rebooted — is stale:
+# the leftover containers are stopped and the launch proceeds fresh. Treating
+# ANY running container as "cluster up" would skip the launch forever while
+# the head container is missing.
 check_cluster_running() {
-    local running=false
-    
+    local head_running=false
+    local stale_workers=()
+    local running_worker_count=0
+
     # Check Head
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        echo "Warning: Container '$CONTAINER_NAME' is already running on head node ($HEAD_IP)."
-        running=true
+        head_running=true
     fi
-    
+
     # Check Workers
     for worker in "${PEER_NODES[@]}"; do
         if ssh "$worker" "docker ps --format '{{.Names}}' | grep -q '^${CONTAINER_NAME}$'"; then
-             echo "Warning: Container '$CONTAINER_NAME' is already running on worker node ($worker)."
-             running=true
+             running_worker_count=$((running_worker_count + 1))
+             stale_workers+=("$worker")
         fi
     done
-    
-    if [[ "$running" == "true" ]]; then
-        echo "Cluster containers are already running. Skipping launch."
+
+    if [[ "$head_running" == "true" && "$running_worker_count" -eq "${#PEER_NODES[@]}" ]]; then
+        echo "Container '$CONTAINER_NAME' is already running on head and all worker nodes. Skipping launch."
         CLUSTER_WAS_RUNNING="true"
         return 0
+    fi
+
+    if [[ "$head_running" == "true" || "$running_worker_count" -gt 0 ]]; then
+        echo "Warning: Partial cluster state detected (head running: $head_running, workers running: $running_worker_count/${#PEER_NODES[@]})."
+        echo "Stopping stale containers and relaunching the cluster..."
+        if [[ "$head_running" == "true" ]]; then
+            echo "  Stopping stale head container on $HEAD_IP..."
+            docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
+        fi
+        for worker in "${stale_workers[@]}"; do
+            echo "  Stopping stale worker container on $worker..."
+            ssh "$worker" "docker stop $CONTAINER_NAME" >/dev/null 2>&1 || true
+        done
+        # Containers run with --rm; removal after stop is asynchronous. Wait
+        # until the names are actually gone so the relaunch's `docker run
+        # --name` doesn't collide with a half-removed container.
+        local wait_deadline=$(( $(date +%s) + 60 ))
+        while docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; do
+            [[ $(date +%s) -gt $wait_deadline ]] && break
+            sleep 2
+        done
+        for worker in "${stale_workers[@]}"; do
+            while ssh "$worker" "docker ps -a --format '{{.Names}}' | grep -q '^${CONTAINER_NAME}$'"; do
+                [[ $(date +%s) -gt $wait_deadline ]] && break
+                sleep 2
+            done
+        done
     fi
 }
 

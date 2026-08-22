@@ -75,3 +75,14 @@ See the `NOTE(odashi)` comment in the parser.
 `llmjp4_reasoning_parser.py` and `llmjp4_harmony.py` are copyright the LLM-jp
 project (author Yusuke Oda) and redistributed under the Apache License 2.0, the
 licence of `llm-jp/llm-jp-4-cookbook`.
+
+## KaLC modification (2026-08-22)
+
+`extract_reasoning()` (non-streaming path) is rewritten. The cookbook version
+searched for the literal `" assistant final "` in the decoded output, but vLLM
+strips special tokens before calling the parser and the Harmony channel names
+are single tokens, so the text is `analysis<R>assistantfinal<C>` without
+spaces. On vLLM 0.20 the original returned `(None, None)`, i.e. `content: null`
+for every non-streaming chat completion. The replacement parses the same
+structure with regexes tolerant of optional spaces and handles the
+no-analysis and truncated-reasoning cases. Streaming is untouched (token-id based).

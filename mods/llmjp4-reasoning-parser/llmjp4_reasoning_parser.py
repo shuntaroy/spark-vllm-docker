@@ -6,6 +6,7 @@
 # https://github.com/llm-jp/vllm/blob/4383f1532e87e77b6f961e633230f47467cbd072/vllm/reasoning/gptoss_reasoning_parser.py#L65
 
 from collections.abc import Sequence
+import re
 import warnings
 
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
@@ -68,26 +69,37 @@ class Llmjp4ReasoningParser(ReasoningParser):
     def count_reasoning_tokens(self, token_ids: Sequence[int]) -> int:
         return 0
 
+    # KaLC patch: non-streaming path.
+    #
+    # vLLM hands extract_reasoning() the *decoded* output with special tokens
+    # stripped, so a Harmony turn
+    #   <|channel|>analysis<|message|>R<|end|><|start|>assistant<|channel|>final<|message|>C<|return|>
+    # arrives as the plain string "analysisRassistantfinalC" (no spaces: the
+    # channel names are single tokens).  The cookbook's original looked for
+    # " assistant final " and therefore returned (None, None) on vLLM 0.20,
+    # which yields content=null for every non-streaming chat completion.
+    # Streaming is unaffected (it works on token ids).
+    _FINAL_MARKER = re.compile(r"assistant\s?final\s?")
+    _ANALYSIS_PREFIX = re.compile(r"^\s?analysis\s?")
+    _FINAL_PREFIX = re.compile(r"^\s?final\s?")
+
     def extract_reasoning(
         self,
         model_output: str,
         request: ChatCompletionRequest | ResponsesRequest,
     ) -> tuple[str | None, str | None]:
-        warnings.warn(
-            "Non-streaming response is not correctly implemented"
-            " due to the limitation of the current vLLM interface."
-        )
-        # NOTE(odashi):
-        # This is a workaround implementation,
-        # should be replaced with a proper implementation the interface is updated.
-        # We still can not handle the preceding reasoning parts appropriately.
-        marker = " assistant final "
-        marker_index = model_output.rfind(marker)
-        if marker_index == -1:
-            return None, None
-        content = model_output[marker_index + len(marker):].strip()
-        return None, content
-        
+        matches = list(self._FINAL_MARKER.finditer(model_output))
+        if matches:
+            m = matches[-1]
+            reasoning = self._ANALYSIS_PREFIX.sub("", model_output[: m.start()], count=1)
+            content = model_output[m.end():]
+            return (reasoning or None), (content or None)
+        # No analysis channel at all: the turn starts directly with the final channel.
+        if self._FINAL_PREFIX.match(model_output):
+            return None, self._FINAL_PREFIX.sub("", model_output, count=1) or None
+        # Reasoning never finished (e.g. max_tokens hit inside analysis).
+        return self._ANALYSIS_PREFIX.sub("", model_output, count=1) or None, None
+
     def extract_reasoning_streaming(
         self,
         previous_text: str,

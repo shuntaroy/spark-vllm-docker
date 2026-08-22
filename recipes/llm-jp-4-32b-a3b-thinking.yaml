@@ -1,0 +1,72 @@
+# Recipe: llm-jp/llm-jp-4-32b-a3b-thinking
+# LLM-jp-4 32B-A3B MoE thinking model (Qwen3MoeForCausalLM, 128 experts/8 active, BF16, ~64 GB, 64k ctx),
+# served on a single DGX Spark. Based on the cookbook's
+#   python example_cli.py serve llm-jp/llm-jp-4-8b-thinking --reasoning-parser llmjp4 --trust-remote-code
+# (https://github.com/llm-jp/llm-jp-4-cookbook/tree/main/llmjp4_vllm), with the
+# parser loaded via --reasoning-parser-plugin instead of the wrapper CLI.
+#
+# Choices:
+# - --trust-remote-code: tokenizer_config.json auto_maps AutoTokenizer to the
+#   bundled llmjp4_tokenizer.Llmjp4Tokenizer.
+# - reasoning parser: mods/llmjp4-reasoning-parser installs the cookbook parser
+#   (name "llmjp4"). Streaming responses split reasoning/content; non-streaming
+#   returns content only (upstream limitation, see the mod README).
+# - reasoning_effort: not pinned. The chat template defaults to "medium";
+#   clients pass chat_template_kwargs {"reasoning_effort": "low|medium|high"}.
+# - gpu_memory_utilization 0.8 of 128 GB unified = ~102 GB; ~66 GB weights
+#   leaves ~35 GB for KV cache.
+# - --kv-cache-dtype fp8: same as the other recipes in this repo on this image.
+#   UNVERIFIED for this Llama checkpoint on SM121 -- drop it if the attention
+#   backend rejects it or quality looks off.
+# - --load-format fastsafetensors: what the current vllm-node image supports
+#   (instanttensor is only in newer images).
+# - reasoning-parser-plugin path is relative: the mod drops the file into the
+#   container WORKDIR (/workspace/vllm), which is also the cwd of vllm serve
+#   (same convention as --chat-template unsloth.jinja in the Qwen recipes).
+# - no --distributed-executor-backend: solo recipe; -tp 1.
+# - no tool-call parser: the model card shows no tool-calling support via vLLM.
+
+recipe_version: "1"
+name: llm-jp-4-32b-a3b-thinking
+description: vLLM serving llm-jp/llm-jp-4-32b-a3b-thinking (MoE, BF16, single node)
+
+# HuggingFace model to download (optional, for --download-model)
+model: llm-jp/llm-jp-4-32b-a3b-thinking
+
+# Container image to use
+container: vllm-node
+
+mods:
+  - mods/llmjp4-reasoning-parser
+
+# Default settings (can be overridden via CLI)
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 1
+  gpu_memory_utilization: 0.8
+  max_model_len: 65536
+  max_num_batched_tokens: 8192
+
+# Environment variables
+env:
+  # --trust-remote-code makes transformers write the dynamic tokenizer module
+  # under $HF_HOME/modules; our HF cache is bind-mounted read-only (kalc patch),
+  # so point the module cache at a writable location instead.
+  HF_MODULES_CACHE: /tmp/hf_modules
+
+# The vLLM serve command template
+command: |
+  vllm serve llm-jp/llm-jp-4-32b-a3b-thinking \
+    --host {host} \
+    --port {port} \
+    --trust-remote-code \
+    --max-model-len {max_model_len} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --reasoning-parser-plugin llmjp4_reasoning_parser.py \
+    --reasoning-parser llmjp4 \
+    --kv-cache-dtype fp8 \
+    --load-format fastsafetensors \
+    --enable-prefix-caching \
+    -tp {tensor_parallel}

@@ -20,6 +20,9 @@
 #   backend rejects it or quality looks off.
 # - --load-format fastsafetensors: what the current vllm-node image supports
 #   (instanttensor is only in newer images).
+# - reasoning-parser-plugin path is relative: the mod drops the file into the
+#   container WORKDIR (/workspace/vllm), which is also the cwd of vllm serve
+#   (same convention as --chat-template unsloth.jinja in the Qwen recipes).
 # - no --distributed-executor-backend: solo recipe; -tp 1.
 # - no tool-call parser: the model card shows no tool-calling support via vLLM.
 
@@ -46,7 +49,11 @@ defaults:
   max_num_batched_tokens: 8192
 
 # Environment variables
-env: {}
+env:
+  # --trust-remote-code makes transformers write the dynamic tokenizer module
+  # under $HF_HOME/modules; our HF cache is bind-mounted read-only (kalc patch),
+  # so point the module cache at a writable location instead.
+  HF_MODULES_CACHE: /tmp/hf_modules
 
 # The vLLM serve command template
 command: |
@@ -57,7 +64,7 @@ command: |
     --max-model-len {max_model_len} \
     --max-num-batched-tokens {max_num_batched_tokens} \
     --gpu-memory-utilization {gpu_memory_utilization} \
-    --reasoning-parser-plugin /workspace/llmjp4_reasoning_parser.py \
+    --reasoning-parser-plugin llmjp4_reasoning_parser.py \
     --reasoning-parser llmjp4 \
     --kv-cache-dtype fp8 \
     --load-format fastsafetensors \

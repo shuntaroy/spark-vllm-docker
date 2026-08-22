@@ -12,4 +12,4 @@ cp llmjp4_harmony.py "$SITE_PACKAGES/llmjp4_harmony.py"
 
 cp llmjp4_reasoning_parser.py "$WORKSPACE_DIR/llmjp4_reasoning_parser.py"
 echo "=======> to apply the LLM-jp-4 reasoning parser, use:"
-echo "         --reasoning-parser-plugin $WORKSPACE_DIR/llmjp4_reasoning_parser.py --reasoning-parser llmjp4"
+echo "         --reasoning-parser-plugin llmjp4_reasoning_parser.py --reasoning-parser llmjp4  (relative to WORKSPACE_DIR=$WORKSPACE_DIR)"

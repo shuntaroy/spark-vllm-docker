@@ -1,0 +1,42 @@
+# Recipe: google/gemma-4-31B-it (BF16, full precision)
+# Dense 31B Gemma 4, served unquantised on a single DGX Spark.
+#
+# KaLC recipe, derived from upstream recipes/gemma4-26b-a4b.yaml but without
+# --quantization fp8 (online FP8): the point is the native BF16 reference to
+# compare against Google's official QAT Q4_0 on the Macs.
+# UNVERIFIED: gemma4 reasoning/tool parsers on vLLM 0.20.2 (upstream uses them).
+
+recipe_version: "1"
+name: Gemma4-31B-BF16
+description: vLLM serving google/gemma-4-31B-it in BF16 on a single DGX Spark
+
+model: google/gemma-4-31B-it
+
+container: vllm-node
+
+mods: []
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 1
+  gpu_memory_utilization: 0.8
+  max_model_len: 131072
+  max_num_batched_tokens: 8192
+
+env: {}
+
+command: |
+  vllm serve google/gemma-4-31B-it \
+    --host {host} \
+    --port {port} \
+    --max-model-len {max_model_len} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --load-format safetensors \
+    --enable-prefix-caching \
+    --enable-auto-tool-choice \
+    --tool-call-parser gemma4 \
+    --reasoning-parser gemma4 \
+    --kv-cache-dtype fp8 \
+    -tp {tensor_parallel}

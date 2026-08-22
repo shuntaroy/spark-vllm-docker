@@ -1,0 +1,55 @@
+# Recipe: Qwen3.8-27B (BF16, full precision)
+# Dense 27.8B Qwen3.8 (qwen3_5 architecture: Gated DeltaNet + Gated Attention,
+# with vision encoder). Served unquantised on a single DGX Spark.
+#
+# KaLC recipe. Choices:
+# - BF16 checkpoint (55.6 GB) instead of upstream's NVFP4 example: the point of
+#   running it on the Spark is full precision; NVFP4 fits a Mac Studio anyway.
+# - No DFlash2/DSpark draft: needs vLLM PR #52816 (post-0.27.1) and extra draft
+#   weights. The checkpoint carries its own MTP layer, so built-in MTP spec-decode
+#   is used instead (same method as the upstream Qwen3.8 vLLM recipe).
+# - fastsafetensors loader: matches the vllm-node image we run (instanttensor
+#   only exists in newer upstream images).
+# - gpu_memory_utilization 0.8 leaves ~40 GB for KV; with fp8 KV that is far
+#   more than 256k tokens of context.
+# UNVERIFIED on Spark: MTP with qwen3_5 on vLLM 0.20.x, chat template correctness
+# (Qwen3.5/3.6 needed fixed templates — check tool calls and reasoning split).
+
+recipe_version: "1"
+name: Qwen3.8-27B-BF16
+description: vLLM serving Qwen/Qwen3.8-27B in BF16 on a single DGX Spark
+
+model: Qwen/Qwen3.8-27B
+
+container: vllm-node
+
+mods: []
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 1
+  gpu_memory_utilization: 0.8
+  max_model_len: 262144
+  max_num_seqs: 8
+  max_num_batched_tokens: 16384
+  num_speculative_tokens: 3
+
+env: {}
+
+command: |
+  vllm serve Qwen/Qwen3.8-27B \
+    --host {host} \
+    --port {port} \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --kv-cache-dtype fp8 \
+    --load-format fastsafetensors \
+    --enable-prefix-caching \
+    --enable-auto-tool-choice \
+    --tool-call-parser qwen3_xml \
+    --reasoning-parser qwen3 \
+    --speculative-config '{{"method":"mtp","num_speculative_tokens":{num_speculative_tokens}}}' \
+    -tp {tensor_parallel}

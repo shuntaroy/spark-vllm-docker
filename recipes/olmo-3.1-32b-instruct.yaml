@@ -1,6 +1,6 @@
 # Recipe: allenai/Olmo-3.1-32B-Instruct
 # Olmo 3.1 32B Instruct (Olmo3ForCausalLM, dense, BF16, 60.0 GiB, 64k ctx), served
-# on a single DGX Spark next to EuroLLM-22B-Instruct-2512.
+# on a single DGX Spark, as pouse's only resident model.
 #
 # Why the Instruct variant: OpenRouter carries only Olmo-3.1-32B-Think, so the
 # Instruct and Base checkpoints are the ones that have to be served locally.
@@ -11,10 +11,10 @@
 # - memory is an absolute budget in GiB via mods/gpu-mem-util-gb, not a fraction:
 #   a fraction is computed against total device memory and then reduced by
 #   everything already resident, so it does not compose between processes.
-# - this model is the sole tenant of pouse. EuroLLM-22B was meant to sit beside it
-#   but the two do not co-fit at BF16: 60.0 + 42.2 GiB of weights against ~118 GiB
-#   usable leaves nothing for two engines' overhead plus two KV caches. EuroLLM is
-#   on-demand instead, so this budget is sized for a node to itself.
+# - this model is the sole tenant of pouse, so the budget is sized for a node to
+#   itself. EuroLLM-22B was meant to sit beside it; the two do not co-fit at BF16
+#   (60.0 + 42.2 GiB of weights against ~118 GiB usable leaves nothing for two
+#   engines' overhead plus two KV caches) and it was dropped from the lineup.
 # - 80 GiB against 60.1 GiB of weights plus ~6 GiB of CUDA graph, activation and
 #   non-torch overhead leaves ~14 GiB of KV, ~220k tokens at fp8 (64 KiB/token:
 #   8 KV heads, head_dim 128, 64 layers), so the full 64k window has real

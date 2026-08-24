@@ -42,6 +42,10 @@ def write(path: Path, old: str, new: str) -> None:
         changed_paths.add(path)
 
 
+def skip(message: str) -> None:
+    print(f"[gpu-mem-util-gb] Skipping: {message}")
+
+
 def replace_once(
     text: str,
     old: str,
@@ -49,10 +53,17 @@ def replace_once(
     description: str,
     *,
     already: str | None = None,
+    optional: bool = False,
 ) -> tuple[str, bool]:
     if already is not None and already in text:
         return text, False
     if old not in text:
+        # Anchors that only rewrite a log or error message are allowed to go
+        # missing: they differ between vLLM releases and none of them affect how
+        # memory is reserved. Anchors that carry behaviour stay fatal.
+        if optional:
+            skip(f"{description} — anchor absent in this vLLM; message left as-is.")
+            return text, False
         die(f"Could not find expected source anchor for {description}.")
     return text.replace(old, new, 1), True
 
@@ -102,19 +113,33 @@ def replace_function(
 def replace_between(
     text: str,
     start_marker: str,
-    end_marker: str,
+    end_marker: str | tuple[str, ...],
     replacement: str,
     description: str,
     *,
     already: str | None = None,
+    optional: bool = False,
 ) -> tuple[str, bool]:
     if already is not None and already in text:
         return text, False
     start = text.find(start_marker)
     if start == -1:
+        if optional:
+            skip(f"{description} — start anchor absent in this vLLM.")
+            return text, False
         die(f"Could not find start anchor for {description}.")
-    end = text.find(end_marker, start)
+    # The statement that closes the block differs between vLLM releases, so try
+    # each known form and take the first that appears after the start anchor.
+    markers = (end_marker,) if isinstance(end_marker, str) else end_marker
+    end = -1
+    for marker in markers:
+        end = text.find(marker, start)
+        if end != -1:
+            break
     if end == -1:
+        if optional:
+            skip(f"{description} — end anchor absent in this vLLM.")
+            return text, False
         die(f"Could not find end anchor for {description}.")
     return text[:start] + replacement + text[end:], True
 
@@ -433,10 +458,16 @@ def patch_gpu_worker() -> None:
     text, _ = replace_between(
         text,
         "        if cudagraph_memory_estimate > 0:\n",
-        "        return self._reserve_mm_ipc_gpu_memory(\n",
+        (
+            "        return self._reserve_mm_ipc_gpu_memory(\n",
+            # vLLM 0.20.x closes the block by returning directly; the
+            # multimodal IPC reserve helper only exists in later releases.
+            "        return int(self.available_kv_cache_memory_bytes)\n",
+        ),
         cudagraph_block,
         "GPU worker CUDA graph memory suggestions",
         already="--gpu-memory-utilization-gb=%.4f",
+        optional=True,
     )
 
     text, _ = replace_once(
@@ -446,6 +477,7 @@ def patch_gpu_worker() -> None:
         '                "gpu_memory_utilization_gb."\n',
         "GPU worker multimodal reserve error",
         already='"gpu_memory_utilization_gb."\n',
+        optional=True,
     )
     text = text.replace(
         '\n"gpu_memory_utilization_gb."\n',
@@ -493,6 +525,7 @@ def patch_gpu_worker() -> None:
             "                f\"GiB for CUDAGraph memory. Replace memory utilization config \"\n"
             "                f\"with `--kv-cache-memory=\"\n",
             "GPU worker warmup suggestion message",
+            optional=True,
         )
 
     write(path, original, text)
@@ -565,7 +598,11 @@ def patch_messages() -> None:
         path, text = read(rel)
         original = text
         for old, new, description, already in items:
-            text, _ = replace_once(text, old, new, description, already=already)
+            # Every entry here only widens a user-facing message to mention the
+            # new flag, so a release that words it differently is not an error.
+            text, _ = replace_once(
+                text, old, new, description, already=already, optional=True
+            )
         write(path, original, text)
 
 

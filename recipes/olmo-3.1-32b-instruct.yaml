@@ -1,0 +1,59 @@
+# Recipe: allenai/Olmo-3.1-32B-Instruct
+# Olmo 3.1 32B Instruct (Olmo3ForCausalLM, dense, BF16, 60.0 GiB, 64k ctx), served
+# on a single DGX Spark next to EuroLLM-22B-Instruct-2512.
+#
+# Why the Instruct variant: OpenRouter carries only Olmo-3.1-32B-Think, so the
+# Instruct and Base checkpoints are the ones that have to be served locally.
+#
+# Choices:
+# - Olmo3ForCausalLM is in the registry of the vLLM build in the vllm-node image
+#   (0.20.2rc1), so no architecture mod is needed.
+# - memory is an absolute budget in GiB via mods/gpu-mem-util-gb, not a fraction:
+#   a fraction is computed against total device memory, so the co-tenant EuroLLM
+#   would contend for the same bytes. 66 GiB against 60.0 GiB of weights leaves
+#   ~4 GiB of KV, which at fp8 (64 KiB/token: 8 KV heads, head_dim 128, 64 layers)
+#   is ~65k tokens — hence max_model_len 32768 rather than the full 64k, to keep
+#   room for concurrent sequences.
+# - this node is the tight one: Olmo 60.0 GiB + EuroLLM 42.2 GiB of weights against
+#   ~120 GiB visible. Lower this budget before raising it.
+# - --kv-cache-dtype fp8 and --load-format fastsafetensors: same as the sibling
+#   recipes on this image.
+# - no reasoning parser: the Instruct chat template has no channel structure (that
+#   is the Think variant). No tool-call parser either.
+
+recipe_version: "1"
+name: Olmo-3.1-32B-Instruct
+description: vLLM serving allenai/Olmo-3.1-32B-Instruct (dense 32B, BF16, single node)
+
+model: allenai/Olmo-3.1-32B-Instruct
+
+container: vllm-node
+
+# Own container: pouse runs this alongside EuroLLM-22B-Instruct-2512.
+container_name: vllm_olmo31_32b
+
+mods:
+  - mods/gpu-mem-util-gb
+
+# NOTE: gpu_memory_utilization is GiB here, not a fraction (see mods above).
+defaults:
+  port: 8003
+  host: 0.0.0.0
+  tensor_parallel: 1
+  gpu_memory_utilization: 66
+  max_model_len: 32768
+  max_num_batched_tokens: 8192
+
+env: {}
+
+command: |
+  vllm serve allenai/Olmo-3.1-32B-Instruct \
+    --host {host} \
+    --port {port} \
+    --max-model-len {max_model_len} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gpu-memory-utilization-gb {gpu_memory_utilization} \
+    --kv-cache-dtype fp8 \
+    --load-format fastsafetensors \
+    --enable-prefix-caching \
+    -tp {tensor_parallel}

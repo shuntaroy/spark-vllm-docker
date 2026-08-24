@@ -1,0 +1,59 @@
+# Recipe: utter-project/EuroLLM-22B-Instruct-2512
+# EuroLLM 22B Instruct (LlamaForCausalLM, dense, BF16, 42.2 GiB, 32k ctx), served
+# on a single DGX Spark next to Olmo-3.1-32B-Instruct.
+#
+# Why the -2512 checkpoint: it is the released successor to the -Preview upload
+# and the newest non-preview 22B the project ships. EuroLLM is not on OpenRouter,
+# and its class-A open training data (Japanese included) is the reason to hold a
+# native-precision copy locally.
+#
+# Choices:
+# - plain LlamaForCausalLM with a ChatML-style chat template in
+#   tokenizer_config.json; no trust-remote-code, no parser mods needed.
+# - memory is an absolute budget in GiB via mods/gpu-mem-util-gb, not a fraction.
+#   This is the smaller tenant on the tight node: 47 GiB against 42.2 GiB of
+#   weights leaves ~2 GiB of KV, ~38k tokens at fp8 (54 KiB/token: 8 KV heads,
+#   head_dim 128, 54 layers). max_model_len is held at 16384 rather than the
+#   model's 32768 so that concurrent sequences still fit.
+# - pouse holds 60.0 GiB (Olmo) + 42.2 GiB (this) of weights against ~120 GiB
+#   visible. If the pair does not co-fit, this is the model to drop to on-demand;
+#   see docs/multi-model-serving.md in the dgx-setup repo.
+# - --kv-cache-dtype fp8 and --load-format fastsafetensors: same as the sibling
+#   recipes on this image.
+
+recipe_version: "1"
+name: EuroLLM-22B-Instruct
+description: vLLM serving utter-project/EuroLLM-22B-Instruct-2512 (dense 22B, BF16, single node)
+
+model: utter-project/EuroLLM-22B-Instruct-2512
+
+container: vllm-node
+
+# Own container: pouse runs this alongside Olmo-3.1-32B-Instruct.
+container_name: vllm_eurollm_22b
+
+mods:
+  - mods/gpu-mem-util-gb
+
+# NOTE: gpu_memory_utilization is GiB here, not a fraction (see mods above).
+defaults:
+  port: 8004
+  host: 0.0.0.0
+  tensor_parallel: 1
+  gpu_memory_utilization: 47
+  max_model_len: 16384
+  max_num_batched_tokens: 8192
+
+env: {}
+
+command: |
+  vllm serve utter-project/EuroLLM-22B-Instruct-2512 \
+    --host {host} \
+    --port {port} \
+    --max-model-len {max_model_len} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gpu-memory-utilization-gb {gpu_memory_utilization} \
+    --kv-cache-dtype fp8 \
+    --load-format fastsafetensors \
+    --enable-prefix-caching \
+    -tp {tensor_parallel}

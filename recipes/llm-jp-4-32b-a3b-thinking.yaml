@@ -13,8 +13,12 @@
 #   returns content only (upstream limitation, see the mod README).
 # - reasoning_effort: not pinned. The chat template defaults to "medium";
 #   clients pass chat_template_kwargs {"reasoning_effort": "low|medium|high"}.
-# - gpu_memory_utilization 0.8 of 128 GB unified = ~102 GB; ~66 GB weights
-#   leaves ~35 GB for KV cache.
+# - memory is an absolute budget, not a fraction: this model shares chunse with
+#   llm-jp-4-8b-instruct, and a fraction is computed against total device memory,
+#   so two co-tenants each asking for "0.55" would both try to claim the same
+#   bytes. mods/gpu-mem-util-gb reinterprets gpu_memory_utilization as GiB.
+#   70 GiB against 59.9 GiB of weights leaves ~7 GiB of KV, which at fp8
+#   (64 KiB/token for this KV geometry) is well past the 64k context window.
 # - --kv-cache-dtype fp8: same as the other recipes in this repo on this image.
 #   UNVERIFIED for this Llama checkpoint on SM121 -- drop it if the attention
 #   backend rejects it or quality looks off.
@@ -36,15 +40,20 @@ model: llm-jp/llm-jp-4-32b-a3b-thinking
 # Container image to use
 container: vllm-node
 
+# Own container: chunse runs this alongside llm-jp-4-8b-instruct.
+container_name: vllm_llmjp4_32b
+
 mods:
   - mods/llmjp4-reasoning-parser
+  - mods/gpu-mem-util-gb
 
 # Default settings (can be overridden via CLI)
+# NOTE: gpu_memory_utilization is GiB here, not a fraction (see mods above).
 defaults:
-  port: 8000
+  port: 8001
   host: 0.0.0.0
   tensor_parallel: 1
-  gpu_memory_utilization: 0.8
+  gpu_memory_utilization: 70
   max_model_len: 65536
   max_num_batched_tokens: 8192
 
@@ -63,7 +72,7 @@ command: |
     --trust-remote-code \
     --max-model-len {max_model_len} \
     --max-num-batched-tokens {max_num_batched_tokens} \
-    --gpu-memory-utilization {gpu_memory_utilization} \
+    --gpu-memory-utilization-gb {gpu_memory_utilization} \
     --reasoning-parser-plugin llmjp4_reasoning_parser.py \
     --reasoning-parser llmjp4 \
     --kv-cache-dtype fp8 \

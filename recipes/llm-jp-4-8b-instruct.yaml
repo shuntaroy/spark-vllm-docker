@@ -1,0 +1,65 @@
+# Recipe: llm-jp/llm-jp-4-8b-instruct
+# LLM-jp-4 8B instruct (LlamaForCausalLM, dense, BF16, 16.0 GiB, 64k ctx), served
+# on a single DGX Spark next to llm-jp-4-32b-a3b-thinking.
+#
+# Choices:
+# - --trust-remote-code: like the rest of the LLM-jp-4 family, tokenizer_config.json
+#   auto_maps AutoTokenizer to the bundled llmjp4_tokenizer.Llmjp4Tokenizer.
+# - reasoning parser: the "instruct" name is misleading — the shipped
+#   chat_template.jinja is Harmony-style and emits analysis/final channels, and the
+#   repo carries llmjp4_harmony.py. Without the parser the analysis channel leaks
+#   into message content. Same mods/llmjp4-reasoning-parser as the thinking models;
+#   streaming splits reasoning from content, non-streaming returns content only.
+# - memory is an absolute budget in GiB via mods/gpu-mem-util-gb, not a fraction:
+#   a fraction is computed against total device memory, so a co-tenant model would
+#   contend for the same bytes. 24 GiB against 16.0 GiB of weights leaves ~6 GiB of
+#   KV, which at fp8 (32 KiB/token for this KV geometry: 8 KV heads, head_dim 128,
+#   32 layers) covers the full 64k window many times over.
+# - --kv-cache-dtype fp8 and --load-format fastsafetensors: same as the sibling
+#   recipes on this image.
+# - no tool-call parser: the model card shows no tool-calling support via vLLM.
+
+recipe_version: "1"
+name: llm-jp-4-8b-instruct
+description: vLLM serving llm-jp/llm-jp-4-8b-instruct (dense 8B, BF16, single node)
+
+model: llm-jp/llm-jp-4-8b-instruct
+
+container: vllm-node
+
+# Own container: chunse runs this alongside llm-jp-4-32b-a3b-thinking.
+container_name: vllm_llmjp4_8b
+
+mods:
+  - mods/llmjp4-reasoning-parser
+  - mods/gpu-mem-util-gb
+
+# NOTE: gpu_memory_utilization is GiB here, not a fraction (see mods above).
+defaults:
+  port: 8002
+  host: 0.0.0.0
+  tensor_parallel: 1
+  gpu_memory_utilization: 24
+  max_model_len: 65536
+  max_num_batched_tokens: 8192
+
+env:
+  # --trust-remote-code makes transformers write the dynamic tokenizer module
+  # under $HF_HOME/modules; our HF cache is bind-mounted read-only (kalc patch),
+  # so point the module cache at a writable location instead.
+  HF_MODULES_CACHE: /tmp/hf_modules
+
+command: |
+  vllm serve llm-jp/llm-jp-4-8b-instruct \
+    --host {host} \
+    --port {port} \
+    --trust-remote-code \
+    --max-model-len {max_model_len} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gpu-memory-utilization-gb {gpu_memory_utilization} \
+    --reasoning-parser-plugin llmjp4_reasoning_parser.py \
+    --reasoning-parser llmjp4 \
+    --kv-cache-dtype fp8 \
+    --load-format fastsafetensors \
+    --enable-prefix-caching \
+    -tp {tensor_parallel}

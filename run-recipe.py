@@ -174,6 +174,10 @@ def load_recipe(recipe_path: Path) -> dict[str, Any]:
             Used by run-recipe.py to determine which features are available.
             Current version: '1'. Bump when adding new recipe fields.
         container (str, required): Docker image tag to use (e.g., 'vllm-node-mxfp4')
+        container_name (str, optional): Name for the running container. Needed when
+            several models are served concurrently on one host, so each gets its own
+            container, compile caches and stop/status target. --name overrides it;
+            omitting it falls back to .env CONTAINER_NAME or 'vllm_node'.
         command (str, required): vLLM serve command template with {placeholders}
         description (str, optional): Brief description shown in --list
         model (str, optional): HuggingFace model ID for --setup downloads
@@ -231,6 +235,7 @@ def load_recipe(recipe_path: Path) -> dict[str, Any]:
     recipe.setdefault("env", {})
     recipe.setdefault("cluster_only", False)
     recipe.setdefault("solo_only", False)
+    recipe.setdefault("container_name", None)
 
     # Validate recipe version compatibility
     # EXTENSIBILITY: When adding new schema versions, update SUPPORTED_VERSIONS
@@ -1060,6 +1065,14 @@ Examples:
     # Determine container image
     container = args.container_override or recipe["container"]
     model = recipe.get("model")
+
+    # Resolve the container name: --name wins, otherwise the recipe may name its
+    # own container. Several models are served side by side on one Spark, one
+    # container each, so the name has to travel with the recipe rather than
+    # being retyped at every call site (systemd unit, manual restart, ja-eval).
+    # Recipes without the field keep the historical .env/default behaviour.
+    if not args.container_name:
+        args.container_name = recipe.get("container_name")
     build_args = recipe.get("build_args", [])
 
     # Parse nodes - check command line first, then .env file, then autodiscover

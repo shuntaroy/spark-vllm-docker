@@ -35,6 +35,7 @@ MASTER_PORT="29501"
 # Initialize variables
 NODES_ARG=""
 CONTAINER_NAME="$DEFAULT_CONTAINER_NAME"
+CONTAINER_NAME_SET="false"
 COMMAND_TO_RUN=""
 DAEMON_MODE="false"
 CHECK_CONFIG="false"
@@ -144,7 +145,7 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         -n|--nodes) NODES_ARG="$2"; shift ;;
         -t) IMAGE_NAME="$2"; shift ;;
-        --name) CONTAINER_NAME="$2"; shift ;;
+        --name) CONTAINER_NAME="$2"; CONTAINER_NAME_SET="true"; shift ;;
         --eth-if) ETH_IF="$2"; shift ;;
         --ib-if) IB_IF="$2"; shift ;;
         -e|--env) DOCKER_ARGS="$DOCKER_ARGS -e $2"; shift ;;
@@ -332,7 +333,12 @@ if [[ -z "$MASTER_PORT" || "$MASTER_PORT" == "29501" ]] && [[ -n "$DOTENV_MASTER
     MASTER_PORT="$DOTENV_MASTER_PORT"
 fi
 
-if [[ -z "$CONTAINER_NAME" || "$CONTAINER_NAME" == "vllm_node" ]] && [[ -n "$DOTENV_CONTAINER_NAME" ]]; then
+# .env supplies the container name only when --name was not given. The test used
+# to compare the *value* against the default, so an explicit `--name vllm_node`
+# was silently overridden by .env. With several models per host the name is the
+# only thing separating one container from another, so it has to be honoured
+# exactly as passed.
+if [[ "$CONTAINER_NAME_SET" != "true" ]] && [[ -n "$DOTENV_CONTAINER_NAME" ]]; then
     CONTAINER_NAME="$DOTENV_CONTAINER_NAME"
 fi
 
@@ -410,23 +416,39 @@ if [[ -n "$BUILD_JOBS" ]]; then
 fi
 
 # Add cache dirs if requested
+#
+# KaLC patch: give every non-default container its own compile-cache tree.
+# The vllm/flashinfer/triton/tilelang mounts are read-write and receive JIT and
+# torch-inductor artifacts as the engine warms up. When two models run side by
+# side on one Spark they would otherwise write into the same directories
+# concurrently, and a half-written .so/.cubin is visible to the other process
+# before it is complete. vLLM's own cache is partitioned by a config hash, but
+# the flashinfer and triton JIT trees are not, so sharing them is unsafe rather
+# than merely wasteful.
+#
+# The default container name keeps the historical paths, so the TP=2 flagship
+# reuses its warm caches untouched; only per-model containers get a suffix.
+CACHE_SUFFIX=""
+if [[ "$CONTAINER_NAME" != "$DEFAULT_CONTAINER_NAME" ]]; then
+    CACHE_SUFFIX="-${CONTAINER_NAME#vllm_}"
+fi
 CACHE_DIRS_TO_CREATE=()
 if [[ "$MOUNT_CACHE_DIRS" == "true" ]]; then
     # vLLM Cache
-    DOCKER_ARGS="$DOCKER_ARGS -v $HOME/.cache/vllm:/root/.cache/vllm"
-    CACHE_DIRS_TO_CREATE+=("$HOME/.cache/vllm")
-    
+    DOCKER_ARGS="$DOCKER_ARGS -v $HOME/.cache/vllm$CACHE_SUFFIX:/root/.cache/vllm"
+    CACHE_DIRS_TO_CREATE+=("$HOME/.cache/vllm$CACHE_SUFFIX")
+
     # FlashInfer Cache
-    DOCKER_ARGS="$DOCKER_ARGS -v $HOME/.cache/flashinfer:/root/.cache/flashinfer"
-    CACHE_DIRS_TO_CREATE+=("$HOME/.cache/flashinfer")
+    DOCKER_ARGS="$DOCKER_ARGS -v $HOME/.cache/flashinfer$CACHE_SUFFIX:/root/.cache/flashinfer"
+    CACHE_DIRS_TO_CREATE+=("$HOME/.cache/flashinfer$CACHE_SUFFIX")
 
     # Triton Cache
-    DOCKER_ARGS="$DOCKER_ARGS -v $HOME/.triton:/root/.triton"
-    CACHE_DIRS_TO_CREATE+=("$HOME/.triton")
+    DOCKER_ARGS="$DOCKER_ARGS -v $HOME/.triton$CACHE_SUFFIX:/root/.triton"
+    CACHE_DIRS_TO_CREATE+=("$HOME/.triton$CACHE_SUFFIX")
 
     # TileLang Cache
-    DOCKER_ARGS="$DOCKER_ARGS -v $HOME/.tilelang:/root/.tilelang"
-    CACHE_DIRS_TO_CREATE+=("$HOME/.tilelang")
+    DOCKER_ARGS="$DOCKER_ARGS -v $HOME/.tilelang$CACHE_SUFFIX:/root/.tilelang"
+    CACHE_DIRS_TO_CREATE+=("$HOME/.tilelang$CACHE_SUFFIX")
 fi
 
 # Pass user-provided mappings through unchanged so Docker handles its native
@@ -709,7 +731,11 @@ if [[ "$ACTION" == "status" ]]; then
     echo "Checking status..."
     
     # Check Head
-    if docker ps | grep -q "$CONTAINER_NAME"; then
+    # Match the name exactly. An unanchored grep over full `docker ps` output
+    # reports a false positive as soon as another container's name, image or
+    # command merely contains this one (e.g. vllm_llmjp4_8b vs vllm_llmjp4_8b_x),
+    # which is routine once several models share a host.
+    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         echo "[HEAD] $HEAD_IP: Container '$CONTAINER_NAME' is RUNNING."
         if [[ "$NO_RAY_MODE" == "false" ]]; then
             echo "--- Ray Status ---"
@@ -722,7 +748,7 @@ if [[ "$ACTION" == "status" ]]; then
     
     # Check Workers
     for worker in "${PEER_NODES[@]}"; do
-        if ssh "$worker" "docker ps | grep -q '$CONTAINER_NAME'"; then
+        if ssh "$worker" "docker ps --format '{{.Names}}' | grep -q '^${CONTAINER_NAME}$'"; then
              echo "[WORKER] $worker: Container '$CONTAINER_NAME' is RUNNING."
         else
              echo "[WORKER] $worker: Container '$CONTAINER_NAME' is NOT running."

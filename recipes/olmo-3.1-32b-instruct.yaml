@@ -9,13 +9,16 @@
 # - Olmo3ForCausalLM is in the registry of the vLLM build in the vllm-node image
 #   (0.20.2rc1), so no architecture mod is needed.
 # - memory is an absolute budget in GiB via mods/gpu-mem-util-gb, not a fraction:
-#   a fraction is computed against total device memory, so the co-tenant EuroLLM
-#   would contend for the same bytes. 66 GiB against 60.0 GiB of weights leaves
-#   ~4 GiB of KV, which at fp8 (64 KiB/token: 8 KV heads, head_dim 128, 64 layers)
-#   is ~65k tokens — hence max_model_len 32768 rather than the full 64k, to keep
-#   room for concurrent sequences.
-# - this node is the tight one: Olmo 60.0 GiB + EuroLLM 42.2 GiB of weights against
-#   ~120 GiB visible. Lower this budget before raising it.
+#   a fraction is computed against total device memory and then reduced by
+#   everything already resident, so it does not compose between processes.
+# - this model is the sole tenant of pouse. EuroLLM-22B was meant to sit beside it
+#   but the two do not co-fit at BF16: 60.0 + 42.2 GiB of weights against ~118 GiB
+#   usable leaves nothing for two engines' overhead plus two KV caches. EuroLLM is
+#   on-demand instead, so this budget is sized for a node to itself.
+# - 80 GiB against 60.1 GiB of weights plus ~6 GiB of CUDA graph, activation and
+#   non-torch overhead leaves ~14 GiB of KV, ~220k tokens at fp8 (64 KiB/token:
+#   8 KV heads, head_dim 128, 64 layers), so the full 64k window has real
+#   concurrency behind it. Measured 2026-08-24 at 68 GiB: 3.19 GiB KV, 49k tokens.
 # - --kv-cache-dtype fp8 and --load-format fastsafetensors: same as the sibling
 #   recipes on this image.
 # - no reasoning parser: the Instruct chat template has no channel structure (that
@@ -29,7 +32,7 @@ model: allenai/Olmo-3.1-32B-Instruct
 
 container: vllm-node
 
-# Own container: pouse runs this alongside EuroLLM-22B-Instruct-2512.
+# Own container: pouse serves this alone (see the memory note above).
 container_name: vllm_olmo31_32b
 
 mods:
@@ -40,8 +43,8 @@ defaults:
   port: 8003
   host: 0.0.0.0
   tensor_parallel: 1
-  gpu_memory_utilization: 66
-  max_model_len: 32768
+  gpu_memory_utilization: 80
+  max_model_len: 65536
   max_num_batched_tokens: 8192
 
 env: {}

@@ -28,6 +28,9 @@ defaults:
   max_num_batched_tokens: 8192
   max_cudagraph_capture_size: 64
   num_speculative_tokens: 5
+  # Claude Code cannot address a model id containing '/', so the short name
+  # comes first; the HF id stays accepted for existing OpenAI clients.
+  served_model_name: deepseek-v4-flash deepseek-ai/DeepSeek-V4-Flash-0731
 
 env:
   CUTE_DSL_ARCH: "sm_121a"
@@ -50,6 +53,7 @@ command: |
   vllm serve deepseek-ai/DeepSeek-V4-Flash-0731 \
       --host {host} \
       --port {port} \
+      --served-model-name {served_model_name} \
       --trust-remote-code \
       --tensor-parallel-size {tensor_parallel} \
       --kv-cache-dtype fp8 \

@@ -19,7 +19,9 @@ mods: []
 
 defaults:
   port: 8000
-  host: 0.0.0.0
+  # Loopback only: clients come in through Caddy on chunse, which holds the
+  # API key; 0.0.0.0 let anyone on campus bypass it via :8000.
+  host: 127.0.0.1
   tensor_parallel: 2
   gpu_memory_utilization: 0.85
   max_model_len: auto
@@ -28,6 +30,10 @@ defaults:
   max_num_batched_tokens: 8192
   max_cudagraph_capture_size: 48
   num_speculative_tokens: 5
+  # Server-wide output cap: vLLM applies max_new_tokens as min() over every
+  # request, not as a default. 32768 clears Claude Code's 32000 request and
+  # stops a request without max_tokens running to the ~800k context.
+  max_new_tokens: 32768
   # Claude Code cannot address a model id containing '/', so the short name
   # comes first; the HF id stays accepted for existing OpenAI clients.
   served_model_name: deepseek-v4-flash deepseek-ai/DeepSeek-V4-Flash-0731
@@ -54,6 +60,7 @@ command: |
       --host {host} \
       --port {port} \
       --served-model-name {served_model_name} \
+      --override-generation-config '{{"max_new_tokens":{max_new_tokens}}}' \
       --trust-remote-code \
       --tensor-parallel-size {tensor_parallel} \
       --kv-cache-dtype fp8 \

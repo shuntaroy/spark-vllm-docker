@@ -23,7 +23,10 @@ defaults:
   # API key; 0.0.0.0 let anyone on campus bypass it via :8000.
   host: 127.0.0.1
   tensor_parallel: 2
-  gpu_memory_utilization: 0.85
+  # 0.80, not upstream 0.85: at 0.85 each node kept ~8-10 GB of host RAM, the
+  # driver hit NV_ERR_NO_MEMORY during in-flight JIT and the engine later hung
+  # silently (cf. upstream #404).
+  gpu_memory_utilization: 0.80
   max_model_len: auto
   block_size: 256
   max_num_seqs: 8

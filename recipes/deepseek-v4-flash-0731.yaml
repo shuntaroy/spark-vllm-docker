@@ -27,7 +27,12 @@ defaults:
   # driver hit NV_ERR_NO_MEMORY during in-flight JIT and the engine later hung
   # silently (cf. upstream #404).
   gpu_memory_utilization: 0.80
-  max_model_len: auto
+  # Fixed, not auto: auto sizes it to the KV cache, which on unified memory
+  # moves with host state at profiling (336896 / 328960 / 277504 on three
+  # starts in Oct–Nov 2026), and clients (claude-kalc) need a stable limit.
+  # 262144 needs ~6.85 GiB of KV per rank; starts so far gave 7.25+ GiB. If
+  # a start falls short, vLLM refuses to start and the health gate fails.
+  max_model_len: 262144
   block_size: 256
   max_num_seqs: 8
   max_num_batched_tokens: 8192

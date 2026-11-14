@@ -42,6 +42,11 @@ defaults:
   served_model_name: deepseek-v4-flash deepseek-ai/DeepSeek-V4-Flash-0731
 
 env:
+  # The weights are pre-staged in the HF cache on both nodes. Without this,
+  # vLLM's startup Hub lookups make DNS a hard dependency: after the
+  # 2026-11-14 power cut the Sparks booted before campus DNS answered and
+  # the API server died on name resolution.
+  HF_HUB_OFFLINE: "1"
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_AOT_COMPILE: "1"
   VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
